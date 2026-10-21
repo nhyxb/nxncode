@@ -59,7 +59,7 @@ check:ui 使用 /usr/bin/google-chrome，仅启动本机测试服务，并验证
 
 AppImage 可直接运行；系统不支持 FUSE 时可使用 --appimage-extract-and-run。RPM 可通过 Fedora 的软件安装器安装。
 
-发行文件为 dist/nxncode-0.2.9.AppImage 和 dist/nxncode-0.2.9.x86_64.rpm。发行目录附有 SHA256SUMS 时，可运行 `sha256sum -c SHA256SUMS` 核对完整性。
+发行文件为 dist/nxncode-0.3.0.AppImage 和 dist/nxncode-0.3.0.x86_64.rpm。发行目录附有 SHA256SUMS 时，可运行 `sha256sum -c SHA256SUMS` 核对完整性。
 
 scripts/functional-check.mjs 是需要网络和免费模型的完整验收脚本，只使用 .runtime 隔离目录；需先在该目录准备测试 Git 项目，不应在个人真实项目中运行。它通过 NXNCODE_TEST_FIXTURES=1 显式启用本地订单测试站；正常启动不启用。头像状态也使用 scripts/fixtures 中的独立夹具，不在产品内放置假 Bots。
 

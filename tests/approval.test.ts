@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import os from 'node:os'
 import { analyzePermission, type PermissionRequest } from '../src/main/approval'
 import { AutoApproval, permissionFromEvent } from '../src/main/auto-approval'
+import { shouldNotifyPermission } from '../src/shared/modes'
 import type { Engine } from '../src/main/engine'
 import type { Store } from '../src/main/store'
 
@@ -102,6 +103,15 @@ test('permission events are read from every engine event shape', () => {
   assert.equal(permissionFromEvent({ payload: { type: 'session.permission.created', data: { id: 'per_3', sessionID: 'ses_3' } } })?.id, 'per_3')
   assert.equal(permissionFromEvent({ type: 'message.part.updated', data: { id: 'per_4', sessionID: 'ses_4' } }), undefined)
   assert.equal(permissionFromEvent({ type: 'permission.asked', data: { id: 'per_5' } }), undefined)
+})
+
+test('auto approve answers in-app, so only other modes raise a system notice', () => {
+  const permission = { id: 'per_1', sessionID: 'ses_auto' }
+  assert.equal(shouldNotifyPermission(permission, { ses_auto: 'auto' }), false)
+  assert.equal(shouldNotifyPermission(permission, { ses_auto: 'ask' }), true)
+  assert.equal(shouldNotifyPermission(permission, { ses_auto: 'full' }), true)
+  assert.equal(shouldNotifyPermission(permission, {}), true)
+  assert.equal(shouldNotifyPermission({}, {}), false)
 })
 
 type Reply = { sessionID: string; id: string; body: any }

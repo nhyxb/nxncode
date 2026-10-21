@@ -26,3 +26,13 @@ export function resolveSessionMode(
 }
 
 export const modeEffect = (mode: SessionMode) => (mode === 'full' ? 'allow' : 'ask')
+
+// Auto approve answers permissions inside the app, so a system notification
+// would only report work the user never had to do. Requests from other modes
+// still need the tray notification.
+export function shouldNotifyPermission(
+  permission: { sessionID?: string } | undefined,
+  modes?: Record<string, SessionMode>
+): boolean {
+  return !!permission?.sessionID && modes?.[permission.sessionID] !== 'auto'
+}

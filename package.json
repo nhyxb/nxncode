@@ -1,6 +1,6 @@
 {
   "name": "nxncode",
-  "version": "0.2.9",
+  "version": "0.3.0",
   "description": "Linux desktop workspace for coding agents",
   "main": "out/main/index.js",
   "type": "module",

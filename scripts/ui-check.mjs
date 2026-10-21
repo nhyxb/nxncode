@@ -142,7 +142,69 @@ await chooseMode('Ask First');await selectSession('Ask session');await expectMod
 await modes.waitForFunction(()=>!document.querySelector('.mode-button').disabled)
 await expectMode('Ask First')
 await modes.screenshot({path:'.review/session-mode.png'})
+
+// Session list: drag order, pin, rename, fork, archive and one-tap answers.
+const listed=await browser.newPage({viewport:{width:1440,height:900}})
+listed.on('pageerror',e=>errors.push(e.message))
+await listed.addInitScript(()=>{
+ const state={version:1,language:'zh',sidebar:280,panel:420,fontSize:14,bots:[],projects:[],schedules:[],starred:[],sessionPrefs:{},sessionOrder:[]}
+ const sessions=[
+  {id:'ses_one',title:'价格监控',permissions:[{action:'*',resource:'*',effect:'ask'}],appMode:'ask'},
+  {id:'ses_two',title:'重构登录',permissions:[{action:'*',resource:'*',effect:'ask'}],appMode:'ask'},
+  {id:'ses_three',title:'周报',permissions:[{action:'*',resource:'*',effect:'ask'}],appMode:'ask'}
+ ]
+ const copy=value=>JSON.parse(JSON.stringify(value))
+ window.__listFixture={answer:null,answered:false,order:[]}
+ window.nxncode={on:()=>()=>{},invoke:async(action,args={})=>{
+  if(action==='bootstrap')return {state,engine:{status:'ready',version:'2.0.32'},demo:{url:''},tabs:[]}
+  if(action==='catalog')return {models:[],integrations:[]}
+  if(action==='sessions')return copy(sessions)
+  if(action==='preferences'){Object.assign(state,args);return copy(state)}
+  if(action==='session.prefs'){const current={...(state.sessionPrefs[args.id]||{})};if(typeof args.pinned==='boolean')current.pinned=args.pinned;if(typeof args.archived==='boolean')current.archived=args.archived;if(!current.pinned&&!current.archived)delete state.sessionPrefs[args.id];else state.sessionPrefs[args.id]=current;return copy(state.sessionPrefs)}
+  if(action==='session.order'){state.sessionOrder=copy(args.ids);window.__listFixture.order=copy(args.ids);return state.sessionOrder}
+  if(action==='session.rename'){const session=sessions.find(item=>item.id===args.id);if(session)session.title=args.title;return copy(session)}
+  if(action==='session.fork'){const source=sessions.find(item=>item.id===args.id);const fork={...copy(source),id:'ses_fork',title:(source?.title||'会话')+' 副本'};sessions.unshift(fork);return copy(fork)}
+  if(action==='session.get')return copy(sessions.find(item=>item.id===args.id))
+  if(action==='session.messages')return {messages:[],permissions:[],active:false,forms:args.id==='ses_two'&&!window.__listFixture.answered?[{id:'form_env',title:'部署环境',fields:[{key:'env',title:'环境',type:'string',required:true,options:[{value:'staging',label:'预发布',description:'先验证再上线'},{value:'prod',label:'正式环境',description:'直接发布'}]}]}]:[]}
+  if(action==='session.form'){window.__listFixture.answer=copy(args.answer);window.__listFixture.answered=true;return true}
+  return undefined
+ }}
+})
+await listed.goto('http://127.0.0.1:5187');await listed.locator('.welcome').waitFor();await listed.evaluate(()=>document.fonts.ready)
+const sessionRows=()=>listed.locator('.session-row')
+if(await sessionRows().count()!==3)throw Error('Session list did not render engine sessions')
+await listed.screenshot({path:'.review/session-list.png'})
+await sessionRows().nth(2).dragTo(sessionRows().nth(0),{targetPosition:{x:40,y:6}})
+await listed.waitForFunction(()=>window.__listFixture.order.length===3)
+const order=await listed.evaluate(()=>window.__listFixture.order)
+if(order[0]!=='ses_three')throw Error('Drag did not move the session to the top: '+order.join(','))
+await sessionRows().first().hover();await sessionRows().first().locator('.chat-more').click()
+await listed.getByRole('menuitem',{name:'置顶会话'}).click()
+await listed.locator('.pinned-label').waitFor()
+if(!(await sessionRows().first().getAttribute('class')).includes('pinned'))throw Error('Pinned session is not marked')
+await sessionRows().first().hover();await sessionRows().first().locator('.chat-more').click()
+await listed.getByRole('menuitem',{name:'重命名'}).click()
+const rename=listed.getByRole('textbox',{name:'会话名称'})
+await rename.fill('季度复盘');await rename.press('Enter')
+await listed.locator('.session-list').getByText('季度复盘',{exact:true}).waitFor()
+const forkSource=sessionRows().filter({hasText:'价格监控'}).first()
+await forkSource.hover();await forkSource.locator('.chat-more').click()
+await listed.getByRole('menuitem',{name:'分叉会话'}).click()
+await listed.locator('.session-list').getByText('价格监控 副本',{exact:true}).waitFor()
+const archivedRow=sessionRows().filter({hasText:'重构登录'}).first()
+await archivedRow.hover();await archivedRow.locator('.chat-more').click()
+await listed.getByRole('menuitem',{name:'归档会话'}).click()
+await listed.locator('.archive-toggle').waitFor()
+if(await listed.locator('.session-list').getByText('重构登录',{exact:true}).isVisible())throw Error('Archived session stayed in the active list')
+await listed.locator('.archive-toggle').click();await listed.locator('.session-list').getByText('重构登录',{exact:true}).waitFor()
+await sessionRows().filter({hasText:'重构登录'}).first().click()
+await listed.locator('.choice').first().waitFor()
+if(await listed.locator('.choice').count()!==2)throw Error('Question options are not rendered as choices')
+await listed.getByRole('radio',{name:/正式环境/}).click()
+await listed.waitForFunction(()=>window.__listFixture.answer?.env==='prod')
+await listed.locator('.choice').first().waitFor({state:'detached'})
+await listed.screenshot({path:'.review/session-choices.png'})
 await writeFile('.review/session-modes.json',JSON.stringify({menuHasThreeModes:true,perSession:true,newSessionAskFirst:true,draftDoesNotWriteEngine:true,failedChangePreservesMode:true,pendingDisablesSend:true,staleReadIgnored:true,delayedWriteIsolated:true},null,2))
-await writeFile('.review/ui-errors.json',JSON.stringify(errors,null,2));console.log(JSON.stringify({errors,screenshots:14,visualFixture:true,effortSlider:true,sessionModes:true,noFixedExamples:true}));await browser.close();server.kill()
+await writeFile('.review/ui-errors.json',JSON.stringify(errors,null,2));console.log(JSON.stringify({errors,screenshots:16,visualFixture:true,effortSlider:true,sessionModes:true,sessionList:true,noFixedExamples:true}));await browser.close();server.kill()
 if(errors.length)process.exitCode=1
 

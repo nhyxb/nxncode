@@ -11,8 +11,8 @@ import { Engine, unwrap } from './engine'
 import { BrowserService } from './browser'
 import { WindowMotion } from './window-motion'
 import { MCPService, managerTools } from './mcp'
-import { AutoApproval } from './auto-approval'
-import { isSessionMode, modeEffect, resolveSessionMode, type SessionMode } from '../shared/modes'
+import { AutoApproval, permissionFromEvent } from './auto-approval'
+import { isSessionMode, modeEffect, resolveSessionMode, shouldNotifyPermission, type SessionMode } from '../shared/modes'
 import { readDirectory, readFile, searchFiles, attachFile, gitStatus, gitDiff, within } from './workspace'
 import { startDemo, weekly, total } from './demo'
 import { due, nextOccurrence, retryDelay } from '../shared/schedule'
@@ -70,7 +70,7 @@ async function dispatch(action:string,a:Wire={}):Promise<any>{
  case 'sessions':return (unwrap(await engine.request('GET','api/session?limit=100&order=desc&parentID=null'))||[]).map(decorateSession)
  case 'session.create':return createSession(a)
  case 'session.get':return decorateSession(unwrap(await engine.request('GET','api/session/'+encodeURIComponent(a.id))))
- case 'session.messages':return {messages:(unwrap(await engine.request('GET','api/session/'+encodeURIComponent(a.id)+'/message?limit=100&order=asc'))||[]),permissions:unwrap(await engine.request('GET','api/session/'+encodeURIComponent(a.id)+'/permission')),active:!!unwrap(await engine.request('GET','api/session/active'))?.[a.id],forms:unwrap(await engine.request('GET','api/session/'+encodeURIComponent(a.id)+'/form'))}
+ case 'session.messages':{const automatic=store.state.sessionModes?.[a.id]==='auto';return {messages:(unwrap(await engine.request('GET','api/session/'+encodeURIComponent(a.id)+'/message?limit=100&order=asc'))||[]),permissions:automatic?[]:unwrap(await engine.request('GET','api/session/'+encodeURIComponent(a.id)+'/permission')),active:!!unwrap(await engine.request('GET','api/session/active'))?.[a.id],forms:unwrap(await engine.request('GET','api/session/'+encodeURIComponent(a.id)+'/form'))}}
  case 'session.send':{const files=(a.files||[]).filter((p:string)=>attachments.has(p)).map((p:string)=>({uri:pathToFileURL(p).href,name:path.basename(p)}));const ids=new Set<string>(Array.isArray(a.bots)?a.bots:[]);const refs=[...ids].map(id=>{const bot=store.state.bots.find(bot=>bot.id===id);if(!bot)throw Error('引用的 Bot 已被删除，请移除后重试');return {id:bot.id,name:bot.name,role:bot.job}});const text=a.text+(refs.length?'\n\nReferenced Bots (name and role context; mentioning does not dispatch tasks or change permissions):\n'+JSON.stringify(refs):'');approvals.notePrompt(a.id,String(a.text||''));await engine.request('POST','api/session/'+encodeURIComponent(a.id)+'/prompt',{id:a.messageID||messageID(),text,files,delivery:'steer'});return true}
  case 'session.interrupt':return engine.request('POST','api/session/'+encodeURIComponent(a.id)+'/interrupt')
  case 'session.model':return engine.request('POST','api/session/'+encodeURIComponent(a.id)+'/model',{model:a.model})
@@ -86,7 +86,30 @@ async function dispatch(action:string,a:Wire={}):Promise<any>{
  }
  case 'session.permission':if(!['once','always','reject'].includes(a.decision))throw Error('Invalid decision');return engine.request('POST','api/session/'+encodeURIComponent(a.id)+'/permission/'+encodeURIComponent(a.permission)+'/reply',{decision:a.decision,message:a.message})
  case 'session.form':return a.dismiss?engine.request('DELETE','api/session/'+encodeURIComponent(a.id)+'/form/'+encodeURIComponent(a.form)):engine.request('POST','api/session/'+encodeURIComponent(a.id)+'/form/'+encodeURIComponent(a.form)+'/reply',{answer:a.answer})
- case 'session.delete':{const result=await engine.request('DELETE','api/session/'+encodeURIComponent(a.id));if(store.state.sessionModes?.[a.id]){delete store.state.sessionModes[a.id];await save()}return result}
+ case 'session.delete':{const result=await engine.request('DELETE','api/session/'+encodeURIComponent(a.id));if(store.state.sessionModes?.[a.id])delete store.state.sessionModes[a.id];if(store.state.sessionPrefs?.[a.id])delete store.state.sessionPrefs[a.id];store.state.sessionOrder=(store.state.sessionOrder||[]).filter(id=>id!==a.id);await save();return result}
+ case 'session.rename':{const title=String(a.title||'').trim();if(!title)throw Error('会话名称不能为空');if(title.length>200)throw Error('会话名称过长');await engine.request('PATCH','api/session/'+encodeURIComponent(a.id),{title});return decorateSession(unwrap(await engine.request('GET','api/session/'+encodeURIComponent(a.id))))}
+ case 'session.fork':{
+ const source=decorateSession(unwrap(await engine.request('GET','api/session/'+encodeURIComponent(a.id))))
+ const mode:SessionMode=source.appMode||'ask'
+ const session=decorateSession(unwrap(await engine.request('POST','api/session/'+encodeURIComponent(a.id)+'/fork',{})))
+ store.state.sessionModes={...(store.state.sessionModes||{}),[session.id]:mode}
+ await save()
+ if(mode==='auto')void approvals.sweep(session.id)
+ return {...session,appMode:mode}
+ }
+ case 'session.prefs':{
+ const id=String(a.id||'');if(!id||id.length>200)throw Error('Invalid session')
+ const current={...((store.state.sessionPrefs||{})[id]||{})}
+ if(typeof a.pinned==='boolean')current.pinned=a.pinned
+ if(typeof a.archived==='boolean')current.archived=a.archived
+ if(!current.pinned&&!current.archived)delete (store.state.sessionPrefs||{})[id]
+ else store.state.sessionPrefs={...(store.state.sessionPrefs||{}),[id]:current}
+ await save();return store.state.sessionPrefs||{}
+ }
+ case 'session.order':{
+ if(!Array.isArray(a.ids)||a.ids.length>5000||a.ids.some((id:unknown)=>typeof id!=='string'||!id||id.length>200))throw Error('会话顺序格式不正确')
+ store.state.sessionOrder=[...new Set(a.ids)];await save();return store.state.sessionOrder
+ }
  case 'project.open':{const result=await dialog.showOpenDialog(win!,{properties:['openDirectory']});if(result.canceled)return null;const dir=await fs.realpath(result.filePaths[0]);if(!store.state.projects.includes(dir))store.state.projects.unshift(dir);await save();return dir}
  case 'attachments':{const result=await dialog.showOpenDialog(win!,{properties:['openFile','multiSelections']});for(const f of result.filePaths)attachments.add(f);return result.filePaths}
  case 'files.list':return readDirectory(project(a.root),a.path)
@@ -172,7 +195,7 @@ else{
  if(name.startsWith('browser_'))broadcast('browser-focus',{sessionID})
  return browser.tool(name,args,sessionID)
  });await mcp.start()
- engine=new Engine(path.join(store.root,'engine'),()=>mcp.config());extensions=new ExtensionService(store.root,engine);await extensions.load();bots=new BotService(store,engine,save,project);approvals=new AutoApproval(engine,store,sessionDirectory);engine.on('state',s=>{broadcast('engine',s);if(s.status==='ready')void (async()=>{for(const bot of store.state.bots.filter(b=>!b.sessionID))await bots.upsert(bot);await tick();await approvals.sweepAll()})().catch(()=>notify('部分 Bot 初始化失败，请打开编辑器重新保存'))});engine.on('event',e=>{broadcast('engine-event',e);if(['permission.created','permission.asked','session.permission.created'].includes(e.type||e.payload?.type))notify('代理正在等待你的批准');if(e.type==='reconnected')void approvals.sweepAll();else void approvals.onEvent(e)})
+ engine=new Engine(path.join(store.root,'engine'),()=>mcp.config());extensions=new ExtensionService(store.root,engine);await extensions.load();bots=new BotService(store,engine,save,project);approvals=new AutoApproval(engine,store,sessionDirectory);engine.on('state',s=>{broadcast('engine',s);if(s.status==='ready')void (async()=>{for(const bot of store.state.bots.filter(b=>!b.sessionID))await bots.upsert(bot);await tick();await approvals.sweepAll()})().catch(()=>notify('部分 Bot 初始化失败，请打开编辑器重新保存'))});engine.on('event',e=>{broadcast('engine-event',e);const permission=permissionFromEvent(e);if(shouldNotifyPermission(permission,store.state.sessionModes))notify('代理正在等待你的批准');if(e.type==='reconnected')void approvals.sweepAll();else void approvals.onEvent(e)})
  ipcMain.handle('nxn:invoke',async(event,action,args)=>{if(event.sender!==win?.webContents||event.senderFrame!==win.webContents.mainFrame)throw Error('Untrusted sender');return dispatch(action,args)})
  win.webContents.setWindowOpenHandler(({url})=>{if(/^https?:/.test(url))void shell.openExternal(url);return {action:'deny'}})
  win.webContents.on('will-navigate',(event,url)=>{const target=new URL(url);if(process.env.ELECTRON_RENDERER_URL?target.origin!==new URL(process.env.ELECTRON_RENDERER_URL).origin:target.protocol!=='file:')event.preventDefault()})
