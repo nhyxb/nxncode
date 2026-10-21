@@ -1,0 +1,99 @@
+{
+  "name": "nxncode",
+  "version": "0.1.1",
+  "description": "Linux desktop workspace for coding agents",
+  "main": "out/main/index.js",
+  "type": "module",
+  "private": true,
+  "author": "nxncode",
+  "license": "SEE LICENSE IN THIRD_PARTY_NOTICES.md",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "vite --host 127.0.0.1 --config vite.preview.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "pack:dir": "pnpm build && electron-builder --dir",
+    "pack:linux": "pnpm build && bash scripts/package-linux.sh",
+    "postinstall": "electron-builder install-app-deps",
+    "check:ui": "node scripts/ui-check.mjs"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "44.9.1",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.0",
+    "playwright": "^1.56.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0",
+    "@fontsource-variable/inter": "^5.2.8",
+    "@fontsource/noto-sans-sc": "^5.2.8",
+    "@monaco-editor/react": "^4.7.0",
+    "@xterm/xterm": "^5.5.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "lucide-react": "^0.468.0",
+    "monaco-editor": "^0.52.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
+  },
+  "build": {
+    "appId": "dev.nxncode.desktop",
+    "productName": "nxncode",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "resources/**/*",
+      "LICENSE",
+      "NOTICE",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "**/node-pty/**"
+    ],
+    "linux": {
+      "target": [
+        "rpm",
+        "AppImage"
+      ],
+      "category": "Development",
+      "icon": "resources/icon.png",
+      "desktop": {
+        "entry": {
+          "Name": "nxncode",
+          "Comment": "A workspace for your coding agents"
+        }
+      },
+      "maintainer": "nxncode",
+      "syncDesktopName": true
+    },
+    "rpm": {
+      "depends": [
+        "libnotify",
+        "libXtst",
+        "nss",
+        "libXScrnSaver",
+        "alsa-lib"
+      ]
+    }
+  },
+  "packageManager": "pnpm@12.14.0",
+  "homepage": "https://github.com/nhyxb/nxncode",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nhyxb/nxncode.git"
+  },
+  "desktopName": "nxncode.desktop"
+}

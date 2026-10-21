@@ -1,0 +1,8 @@
+minimumReleaseAgeExclude:
+  - electron@44.9.1
+allowBuilds:
+  electron: true
+  electron-winstaller: false
+  esbuild: true
+  node-pty: true
+verifyDepsBeforeRun: false
