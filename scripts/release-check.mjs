@@ -14,7 +14,17 @@ async function waitFor(check,timeout=60000){const start=Date.now();while(Date.no
 async function children(pid){const ids=(await readFile(`/proc/${pid}/task/${pid}/children`,'utf8').catch(()=>'' )).trim().split(/\s+/).filter(Boolean).map(Number);return ids}
 let enginePID
 const result={executable:path.relative(process.cwd(),executable)}
-const browserFixture=createServer((_req,res)=>res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'}).end('<!doctype html><title>Browser acceptance fixture</title><body style="background:#e9ece8;color:#222;font:18px system-ui;padding:24px">Local browser acceptance fixture</body>'))
+const fixturePrompts=[]
+const browserFixture=createServer(async(req,res)=>{
+ if(req.url?.endsWith('/chat/completions')){
+  const chunks=[];for await(const chunk of req)chunks.push(chunk);const body=JSON.parse(Buffer.concat(chunks).toString());fixturePrompts.push(body)
+  const base={id:'release-'+fixturePrompts.length,created:1,model:'release-local-model'}
+  if(body.stream){res.writeHead(200,{'Content-Type':'text/event-stream'});res.write('data: '+JSON.stringify({...base,object:'chat.completion.chunk',choices:[{index:0,delta:{role:'assistant',content:'RELEASE_REFERENCES_OK'},finish_reason:null}]})+'\n\n');res.end('data: '+JSON.stringify({...base,object:'chat.completion.chunk',choices:[{index:0,delta:{},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n')}
+  else res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({...base,object:'chat.completion',choices:[{index:0,message:{role:'assistant',content:'RELEASE_REFERENCES_OK'},finish_reason:'stop'}]}))
+  return
+ }
+ res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'}).end('<!doctype html><title>Browser acceptance fixture</title><body style="background:#e9ece8;color:#222;font:18px system-ui;padding:24px">Local browser acceptance fixture</body>')
+})
 await new Promise(resolve=>browserFixture.listen(0,'127.0.0.1',resolve));browserFixture.unref()
 const fixtureURL='http://127.0.0.1:'+browserFixture.address().port
 try{
@@ -28,6 +38,10 @@ try{
  assert.equal(boot.demo,undefined,'Normal launch started the order fixture')
  assert.equal(await page.locator('.demo-group,.sales-card,.download-banner,.demo-orders').count(),0)
  assert.equal(await page.locator('.sidebar .bot-row').count(),boot.state.bots.length)
+ assert.equal(await page.locator('.tools-pane').getAttribute('aria-hidden'),'true')
+ result.panelInitiallyCollapsed=true
+ await page.getByRole('button',{name:'切换工具面板',exact:true}).click()
+ await delay(300)
  assert.equal(await page.getByRole('textbox',{name:'网址',exact:true}).inputValue(),'')
  const blank=await waitFor(async()=>(await invoke('bootstrap')).tabs[0])
  assert.equal(blank.url,'about:blank')
@@ -54,21 +68,48 @@ try{
  // Native decorations were visually checked separately; Wayland bounds exclude them.
  result.windowControls={systemManaged:true,rendererControls:false,decorations,maximize:true,restore:true,minimize:true}
  const ask=await invoke('session.create',{title:'Release mode Ask',mode:'ask'})
- const build=await invoke('session.create',{title:'Release mode Build',mode:'build'})
+ const auto=await invoke('session.create',{title:'Release mode Auto',mode:'auto'})
+ const full=await invoke('session.create',{title:'Release mode Full',mode:'full'})
  try{
   await page.reload();await page.locator('.welcome').waitFor()
-  for(const [title,label] of [['Release mode Build','Build'],['Release mode Ask','Ask First'],['Release mode Build','Build']]){
+  for(const [title,label] of [['Release mode Full','Full access'],['Release mode Auto','Auto approve'],['Release mode Ask','Ask First'],['Release mode Full','Full access']]){
    await page.getByRole('button',{name:title,exact:true}).click()
    await page.waitForFunction(label=>document.querySelector('.mode-button')?.textContent===label,label)
   }
+  // Auto approve keeps the engine asking and answers requests itself; full relaxes it.
+  const autoSession=await invoke('session.get',{id:auto.id})
+  assert.equal(autoSession.appMode,'auto')
+  assert.equal(autoSession.permissions[0].effect,'ask')
+  assert.equal((await invoke('session.get',{id:full.id})).permissions[0].effect,'allow')
   await page.locator('.mode-button').click()
   await page.locator('.mode-menu button').filter({has:page.locator('strong',{hasText:'Ask First'})}).click()
   await page.waitForFunction(()=>document.querySelector('.mode-button')?.textContent==='Ask First'&&!document.querySelector('.mode-button').disabled)
-  assert.equal((await invoke('session.get',{id:build.id})).permissions[0].effect,'ask')
+  assert.equal((await invoke('session.get',{id:full.id})).permissions[0].effect,'ask')
   await page.getByRole('button',{name:'新会话',exact:false}).first().click()
   assert.equal(await page.locator('.mode-button').textContent(),'Ask First')
-  result.sessionModes={defaultAskFirst:true,perSession:true,engineConfirmed:true}
- }finally{await invoke('session.delete',{id:ask.id});await invoke('session.delete',{id:build.id})}
+  result.sessionModes={defaultAskFirst:true,perSession:true,engineConfirmed:true,autoKeepsAsk:true,fullAllows:true}
+ }finally{for(const session of [ask,auto,full])await invoke('session.delete',{id:session.id})}
+ // Exercise model enablement and custom-provider persistence in the actual package.
+ const originalModel=boot.state.model,originalEnabled=boot.state.enabledModels
+ const providerID='release-local-fixture',modelID='release-local-model'
+ await invoke('provider.save',{id:providerID,name:'Release local provider',baseURL:fixtureURL+'/v1',key:'release-fixture-only',models:[{id:modelID,name:'Release local model'}]})
+ await invoke('preferences',{enabledModels:[providerID+'/'+modelID],model:{id:modelID,providerID,variant:'low'}})
+ await page.reload();await page.locator('.welcome').waitFor()
+ await page.getByRole('button',{name:'调整思考强度',exact:true}).waitFor()
+ await page.getByRole('button',{name:'选择模型',exact:true}).click()
+ assert.equal(await page.locator('.model-row').count(),1)
+ await page.locator('.model-pick').click();await page.locator('.model-picker').waitFor({state:'detached'});assert.equal(await page.locator('.model-effort').count(),0)
+ await page.getByRole('button',{name:'调整思考强度',exact:true}).click()
+ assert.equal(await page.locator('.model-effort').count(),1)
+ await page.getByRole('slider',{name:'思考强度',exact:true}).press('End')
+ await page.waitForFunction(()=>document.querySelector('.model-variant')?.textContent==='high');assert.equal(await page.locator('.model-effort').isVisible(),true)
+ await page.keyboard.press('Escape');await page.locator('.model-effort').waitFor({state:'detached'})
+ const savedVariant=(await invoke('bootstrap')).state.model.variant
+ assert.equal(savedVariant,'high')
+ const publicCatalog=JSON.stringify(await invoke('catalog'));assert.ok(!publicCatalog.includes('release-fixture-only'))
+ assert.ok(!JSON.stringify(await invoke('extensions.list')).includes('release-fixture-only'))
+ result.models={enabledOnly:true,directEffort:true,variant:savedVariant,credentialsRedacted:true}
+ if(await page.locator('.tools-pane').getAttribute('aria-hidden')==='true'){await page.getByRole('button',{name:'切换工具面板',exact:true}).click();await delay(300)}
  await page.evaluate(()=>{window.__windowFrames={opening:[],closing:[]};window.nxncode.on('window-motion',value=>{const start=performance.now();function frame(now){const root=document.querySelector('.app-shell');window.__windowFrames[value.phase].push({transform:getComputedStyle(root).transform,opacity:getComputedStyle(root).opacity});if(now-start<260)requestAnimationFrame(frame)}requestAnimationFrame(frame)})})
  await page.getByRole('textbox',{name:'消息',exact:true}).fill('对照视频后的输入区')
  await page.locator('.composer').screenshot({path:'.review/release-composer.png'})
@@ -87,6 +128,18 @@ try{
  await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1))
  const mainName='Release main '+Date.now()
  const main=await invoke('bot.create',{name:mainName,job:'Coordinate other bots in the release check.'})
+ const refRoot=path.join(boot.root,'workspace'),refName='release-reference.txt',refPath=path.join(refRoot,refName)
+ await writeFile(refPath,'RELEASE_FILE_REFERENCE_MARKER')
+ const refSession=await invoke('session.create',{title:'Local references acceptance',model:{id:modelID,providerID,variant:'low'}})
+ try{
+  assert.ok((await invoke('files.search',{root:refRoot,query:'release-reference'})).some(file=>file.path===refName))
+  const attachment=await invoke('files.attach',{root:refRoot,path:refName});assert.equal(attachment,refPath)
+  await assert.rejects(invoke('files.attach',{root:refRoot,path:'../state.json'}),/路径超出/)
+  await invoke('session.send',{id:refSession.id,text:'Read the attached file and referenced bot.',files:[attachment],bots:[main.id]})
+  await waitFor(async()=>JSON.stringify((await invoke('session.messages',{id:refSession.id})).messages).includes('RELEASE_REFERENCES_OK'),30000)
+  const submitted=JSON.stringify(fixturePrompts);assert.ok(submitted.includes('RELEASE_FILE_REFERENCE_MARKER'));assert.ok(submitted.includes(main.name));assert.ok(submitted.includes(main.job))
+  result.references={actualFileAttachment:true,actualBotContext:true,escapeRejected:true,localInference:true}
+ }finally{await invoke('session.delete',{id:refSession.id})}
  await invoke('bot.main',{id:main.id})
  assert.equal((await invoke('bootstrap')).state.mainBotID,main.id)
  await page.locator('.main-badge').first().waitFor()
@@ -133,6 +186,12 @@ try{
   const rpage=await relaunched.firstWindow()
   const rinvoke=(action,args={})=>rpage.evaluate(({action,args})=>window.nxncode.invoke(action,args),{action,args})
   const rboot=await waitFor(async()=>{const value=await rinvoke('bootstrap');if(value.engine.status==='error')throw Error(value.engine.detail);return value.engine.status==='ready'?value:null})
+  assert.equal(await rpage.locator('.tools-pane').getAttribute('aria-hidden'),'true')
+  assert.deepEqual(rboot.state.enabledModels,[providerID+'/'+modelID]);assert.equal(rboot.state.model.variant,'high')
+  assert.ok((await rinvoke('catalog')).models.some(model=>model.providerID===providerID&&model.id===modelID))
+  result.models.restartRetained=true;result.models.defaultPanelCollapsedAfterRestart=true
+  await rinvoke('provider.delete',{id:providerID})
+  await rinvoke('preferences',{enabledModels:originalEnabled,model:originalModel})
   assert.equal(rboot.state.mainBotID,main.id)
   await rpage.locator('.main-badge').first().waitFor()
   assert.equal(await rpage.locator('.main-badge').first().textContent(),'主')

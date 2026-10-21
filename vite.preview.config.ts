@@ -1,4 +1,5 @@
-import { defineConfig } from 'vite'
+import { defineConfig, searchForWorkspaceRoot } from 'vite'
+import { realpathSync } from 'node:fs'
 import react from '@vitejs/plugin-react'
-export default defineConfig({plugins:[react()],server:{host:'127.0.0.1',port:5173,strictPort:true},build:{outDir:'out/web'}})
+export default defineConfig({plugins:[react()],server:{host:'127.0.0.1',port:5173,strictPort:true,fs:{allow:[searchForWorkspaceRoot(process.cwd()),realpathSync('node_modules')]}},build:{outDir:'out/web'}})
 

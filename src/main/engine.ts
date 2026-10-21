@@ -39,7 +39,9 @@ export class Engine extends EventEmitter {
  const names=['XDG_DATA_HOME','XDG_CONFIG_HOME','XDG_STATE_HOME','XDG_CACHE_HOME','npm_config_cache','BUN_INSTALL']
  const targets=['data','config','state','cache','cache/npm','cache/bun']
  for(let i=0;i<names.length;i++){env['NXNCODE_OWN_'+names[i]]=process.env[names[i]]||'';env[names[i]]=path.join(this.root,targets[i]);await fs.mkdir(env[names[i]]!,{recursive:true,mode:0o700})}
- const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'nxn-'));env.TMPDIR=tmp;this.password=randomBytes(32).toString('base64url');env.OPENCODE_PASSWORD=this.password;env.OPENCODE_CLIENT='desktop';env.OPENCODE_CONFIG_CONTENT=JSON.stringify(this.mcp())
+ const tmp=await fs.mkdtemp(path.join(os.tmpdir(),'nxn-'));env.TMPDIR=tmp;this.password=randomBytes(32).toString('base64url');env.OPENCODE_PASSWORD=this.password;env.OPENCODE_CLIENT='desktop'
+ // Disable shared ~/.agents and ~/.claude skill discovery without changing HOME.
+ const runtimeConfig=this.mcp();env.OPENCODE_CONFIG_CONTENT=JSON.stringify({...runtimeConfig,plugins:[...(runtimeConfig.plugins||[]),'-opencode.config.compatibility']})
  const config=path.join(this.root,'config/opencode');await fs.mkdir(path.join(config,'plugins'),{recursive:true})
  await fs.writeFile(path.join(config,'plugins/nxncode.js'),`export default {id:'nxncode.commands',setup:async ctx=>{await ctx.shell.hook('create.before',input=>{for(const k of ['OPENCODE_CONFIG_CONTENT','OPENCODE_PASSWORD','OPENCODE_SERVER_PASSWORD'])delete input.env[k];for(const key of Object.keys(input.env)){if(!key.startsWith('NXNCODE_OWN_'))continue;const name=key.slice(12);const value=input.env[key];delete input.env[key];if(value)input.env[name]=value;else delete input.env[name]}})}}`,{mode:0o600})
  const cwd=path.join(this.root,'workspace');await fs.mkdir(cwd,{recursive:true})

@@ -11,7 +11,8 @@ const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('console'
 await page.goto('http://127.0.0.1:5187');await page.locator('.welcome').waitFor();await page.evaluate(()=>document.fonts.ready)
 await page.waitForTimeout(250);await page.screenshot({path:'.review/desktop.png'})
 if(await page.locator('.bot-row,.demo-group,.sales-card,.download-banner,.demo-orders').count())throw Error('Fresh workspace contains fabricated bots or activity')
-if(await page.getByRole('textbox',{name:'网址',exact:true}).inputValue()!=='')throw Error('Fresh browser has a sample URL')
+if(!await page.locator('.tools-pane').evaluate(el=>el.classList.contains('is-collapsed')))throw Error('Tool panel must start collapsed')
+if(await page.locator('.address-field input').inputValue()!=='')throw Error('Fresh browser has a sample URL')
 if(!await page.getByText('还没有 Bot',{exact:true}).isVisible())throw Error('Missing real empty bot state')
 if(await page.locator('.window-controls,.window-drag').count())throw Error('App still draws its own window controls')
 if(await page.locator('.main-badge').count())throw Error('Unexpected main badge without a main bot')
@@ -54,8 +55,8 @@ if(await fixture.locator('.main-badge').textContent()!=='主')throw Error('Main 
 await fixture.getByRole('textbox',{name:'消息',exact:true}).fill('这周的销售怎么样？做一张图表。')
 await fixture.locator('.composer').screenshot({path:'.review/composer-ready.png'})
 const bareControls=await fixture.locator('.composer .mode-button,.composer .model-trigger').evaluateAll(els=>els.every(el=>{const s=getComputedStyle(el);return s.boxShadow==='none'&&s.backgroundImage==='none'&&s.borderTopWidth==='0px'}));if(!bareControls)throw Error('Composer controls gained separate plates')
-await fixture.getByRole('button',{name:'选择模型',exact:true}).click();await fixture.locator('.model-pick').click();await fixture.locator('.model-effort').screenshot({path:'.review/model-effort.png'})
-await fixture.getByRole('slider',{name:'思考强度'}).press('End');await fixture.locator('.model-effort').waitFor({state:'detached'});if(await fixture.locator('.model-variant').textContent()!=='high')throw Error('Effort slider selection did not persist')
+await fixture.getByRole('button',{name:'选择模型',exact:true}).click();await fixture.locator('.model-pick').click();await fixture.locator('.model-picker').waitFor({state:'detached'});if(await fixture.locator('.model-effort').count())throw Error('Model selection opened effort');await fixture.getByRole('button',{name:'调整思考强度',exact:true}).click();await fixture.locator('.model-effort').screenshot({path:'.review/model-effort.png'})
+await fixture.getByRole('slider',{name:'思考强度'}).press('End');await fixture.waitForFunction(()=>document.querySelector('.model-variant')?.textContent==='high');if(await fixture.locator('.model-variant').textContent()!=='high')throw Error('Effort slider selection did not persist');if(!await fixture.locator('.model-effort').isVisible())throw Error('Effort closed on selection');await fixture.keyboard.press('Escape');await fixture.locator('.model-effort').waitFor({state:'detached'})
 await fixture.getByRole('button',{name:'新建 Bot',exact:true}).click();await fixture.getByRole('textbox',{name:'Bot 名称'}).fill('Scout');await fixture.locator('.editor-footer').screenshot({path:'.review/editor-actions.png'})
 for(const scale of [1.25,1.5]){
  const context=await browser.newContext({viewport:{width:1280,height:800},deviceScaleFactor:scale});const scaled=await context.newPage();await scaled.goto('http://127.0.0.1:5187');await scaled.locator('.welcome').waitFor();await scaled.evaluate(()=>document.fonts.ready);await scaled.screenshot({path:'.review/scaled-'+scale+'.png'});await context.close()
@@ -64,9 +65,13 @@ for(const scale of [1.25,1.5]){
 const modes=await browser.newPage({viewport:{width:1440,height:900}})
 modes.on('pageerror',e=>errors.push(e.message))
 await modes.addInitScript(()=>{
- const sessions=[{id:'ses_ask',title:'Ask session',permissions:[{action:'*',resource:'*',effect:'ask'}]},{id:'ses_build',title:'Build session',permissions:[{action:'*',resource:'*',effect:'allow'}]}]
- const state={version:1,language:'zh',sidebar:280,panel:420,fontSize:14,bots:[],projects:[],schedules:[],starred:[]}
- window.__modeFixture={rejectNext:false,delayRead:0,delayWrite:400,writes:0}
+ const sessions=[
+  {id:'ses_ask',title:'Ask session',permissions:[{action:'*',resource:'*',effect:'ask'}],appMode:'ask'},
+  {id:'ses_auto',title:'Auto session',permissions:[{action:'*',resource:'*',effect:'ask'}],appMode:'auto'},
+  {id:'ses_full',title:'Full session',permissions:[{action:'*',resource:'*',effect:'allow'}],appMode:'full'}
+ ]
+ const state={version:1,language:'zh',sidebar:280,panel:420,fontSize:14,bots:[],projects:[],schedules:[],starred:[],sessionModes:{ses_ask:'ask',ses_auto:'auto',ses_full:'full'}}
+ window.__modeFixture={rejectNext:false,delayRead:0,delayWrite:400,writes:0,lastMode:''}
  const copy=value=>JSON.parse(JSON.stringify(value))
  window.nxncode={on:()=>()=>{},invoke:async(action,args={})=>{
   if(action==='bootstrap')return {state,engine:{status:'ready',version:'2.0.32'},demo:{url:''},tabs:[]}
@@ -74,11 +79,21 @@ await modes.addInitScript(()=>{
   if(action==='sessions')return copy(sessions)
   if(action==='preferences'){Object.assign(state,args);return copy(state)}
   if(action==='session.messages')return {messages:[],permissions:[],forms:[],active:false}
-  if(action==='session.get'){const snapshot=copy(sessions.find(s=>s.id===args.id));await new Promise(resolve=>setTimeout(resolve,window.__modeFixture.delayRead));return snapshot}
+  if(action==='session.get'){
+   const found=sessions.find(s=>s.id===args.id);if(!found)throw Error('unknown session '+args.id)
+   const snapshot={...copy(found),appMode:state.sessionModes[found.id]}
+   await new Promise(resolve=>setTimeout(resolve,window.__modeFixture.delayRead));return snapshot
+  }
   if(action==='session.mode'){
-   window.__modeFixture.writes++;await new Promise(resolve=>setTimeout(resolve,window.__modeFixture.delayWrite))
+   window.__modeFixture.writes++;window.__modeFixture.lastMode=args.mode
+   await new Promise(resolve=>setTimeout(resolve,window.__modeFixture.delayWrite))
    if(window.__modeFixture.rejectNext){window.__modeFixture.rejectNext=false;throw Error('模式切换失败，请重试')}
-   const session=sessions.find(s=>s.id===args.id);session.permissions=[{action:'*',resource:'*',effect:args.mode==='build'?'allow':'ask'}];return copy(session)
+   if(!['ask','auto','full'].includes(args.mode))throw Error('unknown mode '+args.mode)
+   const session=sessions.find(s=>s.id===args.id);if(!session)throw Error('unknown session '+args.id)
+   state.sessionModes[session.id]=args.mode;session.appMode=args.mode
+   // auto stays an engine "ask" session: only full relaxes the permission rule.
+   session.permissions=[{action:'*',resource:'*',effect:args.mode==='full'?'allow':'ask'}]
+   return copy(session)
   }
  }}
 })
@@ -87,33 +102,47 @@ const modeButton=modes.locator('.mode-button')
 async function expectMode(label){await modes.waitForFunction(label=>document.querySelector('.mode-button')?.textContent===label,label)}
 async function selectSession(title){await modes.getByRole('button',{name:title,exact:true}).click()}
 async function chooseMode(label){await modeButton.click();await modes.locator('.mode-menu button').filter({has:modes.locator('strong',{hasText:label})}).click()}
+const modeLabels=()=>modes.evaluate(()=>[...document.querySelectorAll('.mode-menu button strong')].map(el=>el.textContent))
+const fixtureWrites=()=>modes.evaluate(()=>window.__modeFixture.writes)
 await expectMode('Ask First')
-await selectSession('Build session');await expectMode('Build')
+await modeButton.click()
+const menu=await modeLabels()
+if(JSON.stringify(menu)!==JSON.stringify(['Ask First','Auto approve','Full access']))throw Error('Mode menu does not offer ask/auto/full: '+menu.join(','))
+await modes.keyboard.press('Escape')
+await selectSession('Full session');await expectMode('Full access')
+await selectSession('Auto session');await expectMode('Auto approve')
 await selectSession('Ask session');await expectMode('Ask First')
-await selectSession('Build session');await expectMode('Build')
+await selectSession('Full session');await expectMode('Full access')
 await modes.evaluate(()=>window.__modeFixture.rejectNext=true)
 await modes.getByRole('textbox',{name:'消息',exact:true}).fill('未发送的审批回归检查')
 await chooseMode('Ask First')
 if(!await modeButton.isDisabled()||!await modes.getByRole('button',{name:'发送',exact:true}).isDisabled())throw Error('Permission update permits duplicate actions')
-await modes.getByText('模式切换失败，请重试',{exact:true}).waitFor();await expectMode('Build')
+await modes.getByText('模式切换失败，请重试',{exact:true}).waitFor();await expectMode('Full access')
 await modes.waitForFunction(()=>!document.querySelector('.mode-button').disabled)
-await chooseMode('Ask First');await expectMode('Ask First')
-await selectSession('Ask session');await selectSession('Build session');await expectMode('Ask First')
+await chooseMode('Auto approve');await expectMode('Auto approve')
+if(await modes.evaluate(()=>window.__modeFixture.lastMode)!=='auto')throw Error('Renderer did not send the auto mode to the main process')
+// A change belongs to its own session only.
+await selectSession('Ask session');await expectMode('Ask First')
+await selectSession('Auto session');await expectMode('Auto approve')
+await selectSession('Full session');await expectMode('Auto approve')
+// Draft sessions default to ask and never write an engine rule.
+const writes=await fixtureWrites()
 await modes.getByRole('button',{name:'新会话',exact:false}).first().click();await expectMode('Ask First')
-await chooseMode('Build');await expectMode('Build')
+await chooseMode('Full access');await expectMode('Full access')
+if(await fixtureWrites()!==writes)throw Error('Draft mode change reached the engine')
 await modes.getByRole('button',{name:'新会话',exact:false}).first().click();await expectMode('Ask First')
 // A stale read arriving after a successful PATCH cannot revert that session's label.
 await modes.evaluate(()=>window.__modeFixture.delayRead=600)
-await selectSession('Build session');await expectMode('Ask First')
-await chooseMode('Build');await expectMode('Build')
-await modes.waitForTimeout(700);await expectMode('Build')
+await selectSession('Full session');await expectMode('Auto approve')
+await chooseMode('Full access');await expectMode('Full access')
+await modes.waitForTimeout(700);await expectMode('Full access')
 // A delayed write for another session must not change the current label.
 await modes.evaluate(()=>{window.__modeFixture.delayWrite=300;window.__modeFixture.delayRead=0})
 await chooseMode('Ask First');await selectSession('Ask session');await expectMode('Ask First')
 await modes.waitForFunction(()=>!document.querySelector('.mode-button').disabled)
 await expectMode('Ask First')
 await modes.screenshot({path:'.review/session-mode.png'})
-await writeFile('.review/session-modes.json',JSON.stringify({perSession:true,newSessionAskFirst:true,failedChangePreservesMode:true,pendingDisablesSend:true,staleReadIgnored:true,delayedWriteIsolated:true},null,2))
+await writeFile('.review/session-modes.json',JSON.stringify({menuHasThreeModes:true,perSession:true,newSessionAskFirst:true,draftDoesNotWriteEngine:true,failedChangePreservesMode:true,pendingDisablesSend:true,staleReadIgnored:true,delayedWriteIsolated:true},null,2))
 await writeFile('.review/ui-errors.json',JSON.stringify(errors,null,2));console.log(JSON.stringify({errors,screenshots:14,visualFixture:true,effortSlider:true,sessionModes:true,noFixedExamples:true}));await browser.close();server.kill()
 if(errors.length)process.exitCode=1
 

@@ -20,7 +20,7 @@ const bot=await invoke('bot.save',{name:'Smoke Scout',job:'Only follow the local
 const schedule=await invoke('schedule.add',{botID:bot.id,kind:'once',at:new Date(Date.now()+2000).toISOString(),text:'Reply exactly SCHEDULE_OK. Do not use tools or external services.',timeZone:'Asia/Shanghai'})
 await p.waitForFunction(async id=>{const s=(await window.nxncode.invoke('bootstrap')).state.schedules.find(s=>s.id===id);return s&&!s.enabled},schedule.id,{timeout:65000})
 results.schedule={bot:bot.id,queuedOnce:true};console.log('PASS persisted bot and scheduled delivery')
-const session=await invoke('session.create',{directory:root,title:'Browser/report acceptance',model,mode:'build'})
+const session=await invoke('session.create',{directory:root,title:'Browser/report acceptance',model,mode:'full'})
 await invoke('session.send',{id:session.id,text:'Local app acceptance test. Only work on local test data, no external websites. 1) Use nxncode-tools_browser_navigate to open '+boot.demo.url+'. 2) Use nxncode-tools_browser_click to click Export CSV. Files will be downloaded into '+boot.root+'/artifacts/'+session.id+'. 3) Use a shell command to read that CSV and compute order count and total. 4) Write report.html in your current project folder with those real values. 5) Use nxncode-tools_show_widget to display a small inline SVG chart of real daily totals; embed all data. 6) Use nxncode-tools_show_in_panel to open report.html. Finish with a short Chinese summary. Never use another browser backend or cloud memory.'})
 let settled=false;let snapshot
 for(let i=0;i<90;i++){await new Promise(r=>setTimeout(r,2000));snapshot=await invoke('session.messages',{id:session.id});if(!snapshot.active&&snapshot.messages.some(m=>m.type==='idle')){settled=true;break}}
@@ -45,7 +45,7 @@ if(!worker)throw Error('Main bot did not create a worker bot')
 const mainCalls=mainSnap.messages.flatMap(m=>(m.content||[]).filter(c=>c.type==='tool'&&c.name.endsWith('bot_create')))
 if(!mainCalls.length||mainCalls.some(c=>c.state.status!=='completed'))throw Error('Main bot bot_create did not complete: '+JSON.stringify(mainCalls.map(c=>c.state)))
 results.mainBot={session:mainSession,created:worker.id}
-const plain=await invoke('session.create',{directory:root,title:'Functional plain',model,mode:'build'})
+const plain=await invoke('session.create',{directory:root,title:'Functional plain',model,mode:'full'})
 await invoke('session.send',{id:plain.id,text:'权限边界自检：立即调用一次 nxncode-tools_bot_list（参数 {}）。即使失败也必须调用，不要使用其他工具，然后简短回报。'})
 const plainSnap=await settle(plain.id)
 const plainCalls=plainSnap.messages.flatMap(m=>(m.content||[]).filter(c=>c.type==='tool'&&c.name.endsWith('bot_list')))

@@ -1,6 +1,6 @@
 {
   "name": "nxncode",
-  "version": "0.1.1",
+  "version": "0.2.9",
   "description": "Linux desktop workspace for coding agents",
   "main": "out/main/index.js",
   "type": "module",
@@ -12,7 +12,7 @@
     "build": "electron-vite build",
     "preview": "vite --host 127.0.0.1 --config vite.preview.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test tests/*.test.ts",
+    "test": "node --import tsx --test --test-isolation=none tests/*.test.ts",
     "pack:dir": "pnpm build && electron-builder --dir",
     "pack:linux": "pnpm build && bash scripts/package-linux.sh",
     "postinstall": "electron-builder install-app-deps",
